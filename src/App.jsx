@@ -6,17 +6,37 @@ import { useState, useEffect } from "react";
    Agents: Azure Identity (Auth), Power BI (Analytics), Dynamics 365 (HR Logic)
 ═══════════════════════════════════════════════════════════════ */
 
-/* ─── STORAGE ─── */
-const DB = {
+/* ─── SUPABASE CONFIG ─── */
+const SB_URL = "https://atgqbehlldk lxczgagdu.supabase.co";
+const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImF0Z3FiZWhsbGRrbHhjemdhZ2R1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI4MzA0MzYsImV4cCI6MjA4ODQwNjQzNn0.nV7kKlA7t1zS1KfJHX1QB_U0KqtyQLmt2HBbe4QMQ0o";
+
+const SB = {
   async get(k) {
-    try { if (window.storage && window.storage.get) { const r = await window.storage.get(k); if (r && r.value) return JSON.parse(r.value); } } catch(e) {}
+    try {
+      const r = await fetch(SB_URL+"/rest/v1/hr_storage?key=eq."+k, {
+        headers:{"apikey":SB_KEY,"Authorization":"Bearer "+SB_KEY}
+      });
+      const d = await r.json();
+      if (d && d[0] && d[0].value) return d[0].value;
+    } catch(e) {}
     try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : null; } catch(e) { return null; }
   },
   async set(k, val) {
-    const s = JSON.stringify(val);
-    try { if (window.storage && window.storage.set) await window.storage.set(k, s); } catch(e) {}
-    try { localStorage.setItem(k, s); } catch(e) {}
+    try {
+      await fetch(SB_URL+"/rest/v1/hr_storage", {
+        method:"POST",
+        headers:{"apikey":SB_KEY,"Authorization":"Bearer "+SB_KEY,"Content-Type":"application/json","Prefer":"resolution=merge-duplicates"},
+        body: JSON.stringify({key:k, value:val})
+      });
+    } catch(e) {}
+    try { localStorage.setItem(k, JSON.stringify(val)); } catch(e) {}
   }
+};
+
+/* ─── STORAGE (uses Supabase + localStorage fallback) ─── */
+const DB = {
+  async get(k) { return SB.get(k); },
+  async set(k, val) { return SB.set(k, val); }
 };
 
 /* ─── AUTH ─── */
@@ -339,7 +359,11 @@ function Employees(p) {
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(190px,1fr))",gap:8}}>
             {EF.filter(function(f){
               const salFields=["basic","housing","transport","total"];
-              if(salFields.indexOf(f[0])!==-1) return p.role==="owner"||p.role==="accountant";
+              if(salFields.indexOf(f[0])!==-1){
+                if(p.role==="dataentry") return false;
+                if(p.role==="hr") return (+form.total||0)<=4000;
+                return true;
+              }
               return true;
             }).map(function(f){ return (
               <label key={f[0]} style={{fontSize:11,color:"#94a3b8"}}>{f[1]}
@@ -369,7 +393,7 @@ function Employees(p) {
                 <td style={{...cs.td,color:"#94a3b8"}}>{e.role}</td>
                 <td style={cs.td}>{e.dept}</td>
                 <td style={cs.td}>{fmt(e.start)}</td>
-                <td style={cs.td}>{canSeeSalary(p.role,e.total)?(e.basic?money(+e.basic):"—"):"****"}</td>
+                <td style={cs.td}>{canSeeSalary(p.role,e.total)?(e.basic?money(+e.basic):"—"):<span style={{color:"#475569",letterSpacing:2}}>****</span>}</td>
                 <td style={cs.td}><span style={Bdg(e.status==="Active"?"#22c55e":e.status==="Resigned"?"#f97316":"#ef4444")}>{e.status||"Active"}</span></td>
                 <td style={cs.td}>
                   {canEdit()&&<button style={{...Btn("#1e3a5f"),marginRight:4,fontSize:11}} onClick={()=>{setForm(Object.assign({},blank,e));setShow(true);}}>✏️</button>}
@@ -971,6 +995,8 @@ export default function App() {
   const [logs,setLogs]=useState([]);
   const [slip,setSlip]=useState(null);
   const [loaded,setLoaded]=useState(false);
+  const [savedAt,setSavedAt]=useState(null);
+  const [saving,setSaving]=useState(false);
 
   useEffect(()=>{
     (async()=>{
@@ -984,12 +1010,25 @@ export default function App() {
     })();
   },[]);
 
-  useEffect(()=>{ if(loaded) DB.set("se_emps",emps); },[emps,loaded]);
-  useEffect(()=>{ if(loaded) DB.set("se_att",att);   },[att,loaded]);
-  useEffect(()=>{ if(loaded) DB.set("se_leaves",leaves); },[leaves,loaded]);
-  useEffect(()=>{ if(loaded) DB.set("se_adj",adj);   },[adj,loaded]);
-  useEffect(()=>{ if(loaded) DB.set("se_cars",cars); },[cars,loaded]);
-  useEffect(()=>{ if(loaded) DB.set("se_logs",logs); },[logs,loaded]);
+  useEffect(()=>{ if(loaded){ DB.set("se_emps",emps); setSavedAt(new Date()); } },[emps,loaded]);
+  useEffect(()=>{ if(loaded){ DB.set("se_att",att);   setSavedAt(new Date()); } },[att,loaded]);
+  useEffect(()=>{ if(loaded){ DB.set("se_leaves",leaves); setSavedAt(new Date()); } },[leaves,loaded]);
+  useEffect(()=>{ if(loaded){ DB.set("se_adj",adj);   setSavedAt(new Date()); } },[adj,loaded]);
+  useEffect(()=>{ if(loaded){ DB.set("se_cars",cars); setSavedAt(new Date()); } },[cars,loaded]);
+  useEffect(()=>{ if(loaded){ DB.set("se_logs",logs); setSavedAt(new Date()); } },[logs,loaded]);
+
+  async function manualSave(){
+    setSaving(true);
+    await DB.set("se_emps",emps);
+    await DB.set("se_att",att);
+    await DB.set("se_leaves",leaves);
+    await DB.set("se_adj",adj);
+    await DB.set("se_cars",cars);
+    await DB.set("se_logs",logs);
+    setSavedAt(new Date());
+    setSaving(false);
+    addLog("Manual Save","All data saved by "+user.role);
+  }
 
   function addLog(action,detail){
     if(!user) return;
@@ -1032,7 +1071,13 @@ export default function App() {
           <div style={{fontSize:19,fontWeight:900,letterSpacing:.5}}>⚡ سيدرة إليكتريك — Sedra Electric</div>
           <div style={{fontSize:11,opacity:.7}}>HR ERP System v5.0</div>
         </div>
-        <div style={{display:"flex",alignItems:"center",gap:14}}>
+                  <div style={{display:"flex",alignItems:"center",gap:14}}>
+          <div style={{textAlign:"center",fontSize:11}}>
+              <div style={{color:"#22c55e",fontSize:10}}>{savedAt?"✅ Saved "+savedAt.toLocaleTimeString("en-GB"):"⏳ Not saved yet"}</div>
+              <button onClick={manualSave} style={{...Btn(saving?"#475569":"#166534"),fontSize:11,marginTop:3,padding:"4px 12px"}}>
+                {saving?"💾 Saving…":"💾 Save Now"}
+              </button>
+            </div>
           <div style={{textAlign:"right",fontSize:11}}>
             <div style={{color:user.color,fontWeight:700}}>{user.label} / {user.ar}</div>
             <div style={{opacity:.7}}>{active.length} Active · {todayISO()}</div>

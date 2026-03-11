@@ -44,20 +44,22 @@ const USERS=[
   {role:"accountant",pass:"hasham1980",label:"Accountant",ar:"محاسب",color:"#34d399"},
   {role:"hr",pass:"sedra2026",label:"HR Manager",ar:"موارد بشرية",color:"#60a5fa"},
   {role:"dataentry",pass:"sedra2023",label:"Data Entry",ar:"مُدخل بيانات",color:"#fb923c"},
+  {role:"pm",pass:"sedra2024",label:"Proj. Manager",ar:"مدير مشاريع",color:"#06b6d4"},
 ];
 function can(role,perm){
   const map={
-    salary:    ["owner","accountant"],
-    slips:     ["owner","accountant"],
+    salary:    ["owner","accountant","hr"],
+    slips:     ["owner","accountant","hr"],
     adjEdit:   ["owner","accountant"],
-    deductions:["owner","accountant","hr"],
+    deductions:["owner","accountant","hr","pm"],
     leaveMgr:  ["owner","accountant"],
-    warnings:  ["owner","accountant","hr"],
-    editEmp:   ["owner","hr","dataentry"],
-    attendance:["owner","hr","dataentry"],
+    warnings:  ["owner","accountant","hr","pm"],
+    editEmp:   ["owner","accountant","hr","dataentry"],
+    attendance:["owner","hr","dataentry","pm"],
     cars:      ["owner","hr","dataentry"],
     eosb:      ["owner","accountant"],
     audit:     ["owner"],
+    export:    ["owner","accountant","hr","dataentry"],
   };
   return(map[perm]||[]).includes(role);
 }
@@ -630,7 +632,8 @@ function Salary({emps,att,adj,getAdj,setAdjK,setSlip,role,getCarFines,addLog,war
     return deds.filter(d=>d.empId===empId&&d.month===mk&&d.status==="active").reduce((s,d)=>s+(+d.amount||0),0);
   }
 
-  const rows=emps.map(emp=>{
+  const visibleEmps=role==="hr"?emps.filter(e=>(+e.total||0)<=4000):emps;
+  const rows=visibleEmps.map(emp=>{
     const attMap=(att[moKey(y,m)]||{})[emp.id];
     const carF=getCarFines(emp.id,y,m);
     const adjData={...getAdj(y,m,emp.id),carFines:(getAdj(y,m,emp.id).carFines||0)+(carF||0)};
@@ -1012,7 +1015,7 @@ const ALL_TABS=[
   {k:"eosb",l:"🏁 EOSB",perm:"eosb"},
   {k:"docs",l:"📋 Documents"},
   {k:"audit",l:"🔍 Audit",perm:"audit"},
-  {k:"export",l:"📤 Export"},
+  {k:"export",l:"📤 Export",perm:"export"},
 ];
 
 export default function App(){
@@ -1025,6 +1028,7 @@ export default function App(){
   const [cars,setCars]=useState([]);
   const [warnings,setWarnings]=useState([]);
   const [deds,setDeds]=useState([]);
+  const [payStatus,setPayStatus]=useState({});
   const [logs,setLogs]=useState([]);
   const [slip,setSlip]=useState(null);
   const [loaded,setLoaded]=useState(false);
@@ -1047,6 +1051,7 @@ export default function App(){
           if(all["se_cars"]&&all["se_cars"].length>0)setCars(all["se_cars"]);else setCars(SEED_CARS);
           setWarnings(all["se_warnings"]||[]);
           setDeds(all["se_deds"]||[]);
+          setPayStatus(all["se_payst"]||{});
           setLogs(all["se_logs"]||[]);
         }
       }catch(e){}
@@ -1059,6 +1064,7 @@ export default function App(){
         const lc=await SB.get("se_cars");setCars(lc&&lc.length>0?lc:SEED_CARS);
         setWarnings((await SB.get("se_warnings"))||[]);
         setDeds((await SB.get("se_deds"))||[]);
+        setPayStatus((await SB.get("se_payst"))||{});
         setLogs((await SB.get("se_logs"))||[]);
       }
       setSyncOk(sbOk);
@@ -1098,6 +1104,7 @@ export default function App(){
   useEffect(()=>{if(loaded)SB.set("se_cars",cars);},[cars,loaded]);
   useEffect(()=>{if(loaded)SB.set("se_warnings",warnings);},[warnings,loaded]);
   useEffect(()=>{if(loaded)SB.set("se_deds",deds);},[deds,loaded]);
+  useEffect(()=>{if(loaded)SB.set("se_payst",payStatus);},[payStatus,loaded]);
   useEffect(()=>{if(loaded)SB.set("se_logs",logs);},[logs,loaded]);
 
   function addLog(action,detail){
@@ -1117,7 +1124,7 @@ export default function App(){
     await Promise.all([
       SB.set("se_emps",emps),SB.set("se_att",att),SB.set("se_leaves",leaves),
       SB.set("se_adj",adj),SB.set("se_cars",cars),SB.set("se_warnings",warnings),
-      SB.set("se_deds",deds),SB.set("se_logs",logs)
+      SB.set("se_deds",deds),SB.set("se_payst",payStatus),SB.set("se_logs",logs)
     ]);
     setSyncOk(true);
     setLastSync(new Date().toLocaleTimeString("en-GB"));
@@ -1165,7 +1172,7 @@ export default function App(){
         {tab==="dashboard"&&<Dashboard emps={emps} att={att} leaves={leaves} warnings={warnings} deds={deds} logs={logs} role={role} lastSync={lastSync} syncOk={syncOk}/>}
         {tab==="employees"&&<Employees emps={emps} setEmps={setEmps} role={role} addLog={addLog}/>}
         {tab==="attendance"&&<Attendance emps={active} att={att} setEmpAtt={setEmpAtt} addLog={addLog}/>}
-        {tab==="salary"&&can(role,"salary")&&<Salary emps={active} att={att} adj={adj} getAdj={getAdj} setAdjK={setAdjK} setSlip={setSlip} role={role} getCarFines={getCarFines} addLog={addLog} warnings={warnings} deds={deds}/>}
+        {tab==="salary"&&can(role,"salary")&&<Salary emps={active} att={att} adj={adj} getAdj={getAdj} setAdjK={setAdjK} setSlip={setSlip} role={role} getCarFines={getCarFines} addLog={addLog} warnings={warnings} deds={deds} payStatus={payStatus} setPayStatus={setPayStatus}/>}
         {tab==="deductions"&&can(role,"deductions")&&<DeductionsTab emps={emps} deds={deds} setDeds={setDeds} role={role} addLog={addLog} setSlip={setSlip}/>}
         {tab==="warnings"&&can(role,"warnings")&&<Warnings emps={emps} warnings={warnings} setWarnings={setWarnings} role={role} addLog={addLog} setSlip={setSlip}/>}
         {tab==="leaves"&&can(role,"leaveMgr")&&<Leaves emps={emps} leaves={leaves} setLeaves={setLeaves} role={role} addLog={addLog}/>}

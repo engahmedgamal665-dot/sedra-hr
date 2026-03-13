@@ -59,7 +59,8 @@ function can(role,perm){
     cars:      ["owner","hr","dataentry"],
     eosb:      ["owner","accountant"],
     audit:     ["owner"],
-    export:    ["owner","accountant","hr","dataentry"],
+    // FIX 1: added "pm" to export so Project Manager can back up data
+    export:    ["owner","accountant","hr","dataentry","pm"],
   };
   return(map[perm]||[]).includes(role);
 }
@@ -87,7 +88,8 @@ function salaryCalc(emp,attMap,y,m,adj,warnDed,extraDed){
     else if(code==="S"){P++;S++;}
     else P++;
   }
-  const gross=+emp.total||((+emp.basic||0)+(+emp.housing||0)+(+emp.transport||0));
+  // FIX 2: use explicit > 0 check so gross=0 when total is 0 but components are set
+  const gross=(+emp.total>0)?+emp.total:((+emp.basic||0)+(+emp.housing||0)+(+emp.transport||0));
   const absD=A*daily,lateD=(L1*0.25+L2*0.5)*daily;
   const otAmt=((+adj.otH||0)+OT*2)*hourly*(+adj.otRate||1.25);
   const bonus=+adj.bonus||0,ded=+adj.ded||0,fines=+adj.carFines||0;
@@ -105,7 +107,14 @@ function eosbCalc(basic,start,end,type){
   let raw=yrs<=5?d*21*yrs:d*21*5+d*30*(yrs-5);
   const cap=+basic*24,capped=raw>cap;
   if(capped)raw=cap;
-  if(type==="res"){if(yrs<3)raw=0;else if(yrs<5)raw/=3;}
+  // FIX 3: Correct UAE EOSB resignation fractions
+  // Old code: <3yrs→0, 3-5yrs→raw/3 (both wrong)
+  // Correct:  1-3yrs→1/3 of full, 3-5yrs→2/3 of full, 5+yrs→full
+  if(type==="res"){
+    if(yrs<3) raw=raw/3;
+    else if(yrs<5) raw=raw*(2/3);
+    // yrs >= 5: full amount, no change
+  }
   return{ok:true,yrs,amount:raw,capped,cap,d};
 }
 
@@ -123,7 +132,10 @@ function buildSalarySlip(emp,pr,yr,mo){
     const e=er[i]||["",""];const d=dr[i]||["",""];
     rows+='<tr><td>'+(e[0])+'</td><td class="e">'+(e[1]>0?money(e[1]):"—")+'</td><td class="d">'+(d[1]>0?money(d[1]):"—")+'</td></tr>';
   }
-  const totE=b+h+tr+pr.otAmt+pr.bonus,totD=pr.absD+pr.lateD+pr.ded+pr.fines+pr.warnDed+pr.extraDed;
+  // FIX 4: use pr.gross as the earnings base so it matches the net calculation
+  // Old: totE = b+h+tr+pr.otAmt+pr.bonus (wrong when emp.total differs from component sum)
+  const totE=pr.gross+pr.otAmt+pr.bonus;
+  const totD=pr.absD+pr.lateD+pr.ded+pr.fines+pr.warnDed+pr.extraDed;
   return'<style>'+SCSS+'</style><div style="border:2px solid #1d4ed8;border-radius:8px;overflow:hidden;max-width:720px;margin:0 auto">'+shdr("#1d4ed8","قسيمة راتب — Salary Slip",MN[mo-1]+" "+yr)+'<div style="padding:10px 16px;background:#eff6ff;display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px;font-size:11px;border-bottom:1px solid #bfdbfe"><div><b>Name:</b> '+emp.name+'</div><div><b>ID:</b> '+emp.id+'</div><div><b>Role:</b> '+(emp.role||"—")+'</div><div><b>Dept:</b> '+(emp.dept||"—")+'</div><div><b>Present:</b> '+pr.P+' days</div><div><b>Absent:</b> '+pr.A+' days</div></div><table><thead><tr><th>Description</th><th class="e">Earnings</th><th class="d">Deductions</th></tr></thead><tbody>'+rows+'<tr style="background:#f0fdf4;font-weight:700"><td>Total</td><td class="e">'+money(totE)+'</td><td class="d">'+money(totD)+'</td></tr></tbody></table><div style="background:#1d4ed8;color:#fff;padding:12px 16px;display:flex;justify-content:space-between;align-items:center"><b style="font-size:14px">صافي الراتب / Net Salary</b><b style="font-size:26px">'+money(pr.net)+'</b></div><div style="padding:14px 16px;display:grid;grid-template-columns:1fr 1fr;gap:40px;font-size:11px"><div style="border-top:1px solid #333;padding-top:8px;text-align:center">Employee Signature</div><div style="border-top:1px solid #333;padding-top:8px;text-align:center">Management</div></div></div>';
 }
 function buildWarnSlip(emp,warn){
@@ -137,6 +149,8 @@ function buildEosbSlip(emp,res,type,endDate){
   if(res.yrs<=5)rows+='<tr><td>21 days/yr × '+res.yrs.toFixed(2)+'</td><td>'+money(res.d*21*res.yrs)+'</td></tr>';
   else{rows+='<tr><td>First 5 years (21d)</td><td>'+money(res.d*21*5)+'</td></tr><tr><td>After 5 years (30d × '+(res.yrs-5).toFixed(2)+')</td><td>'+money(res.d*30*(res.yrs-5))+'</td></tr>';}
   if(res.capped)rows+='<tr style="background:#fef3c7"><td>⚠ Capped 24 months</td><td>'+money(res.cap)+'</td></tr>';
+  // FIX 3b: show resignation fraction note on slip
+  if(type==="res"&&res.yrs<5)rows+='<tr style="background:#fff7ed"><td>Resignation fraction applied</td><td style="color:#ea580c">'+(res.yrs<3?"× 1/3 (1–3 yrs)":"× 2/3 (3–5 yrs)")+'</td></tr>';
   rows+='<tr style="font-weight:700;background:#f5f3ff"><td>EOSB Amount</td><td style="color:#6d28d9;font-size:16px">'+money(res.amount)+'</td></tr>';
   return'<style>'+SCSS+'</style><div style="border:2px solid #7c3aed;border-radius:8px;overflow:hidden;max-width:720px;margin:0 auto">'+shdr("#7c3aed","مكافأة نهاية الخدمة",type==="res"?"Resignation":"Termination")+'<div style="padding:10px 16px;background:#faf5ff;display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:11px;border-bottom:1px solid #ede9fe"><div><b>Name:</b> '+emp.name+'</div><div><b>ID:</b> '+emp.id+'</div><div><b>Start:</b> '+fmt(emp.start)+'</div><div><b>End:</b> '+fmt(endDate)+'</div><div><b>Years:</b> '+res.yrs.toFixed(2)+'</div><div><b>Basic:</b> '+money(+emp.basic)+'</div></div><table><tbody>'+rows+'</tbody></table><div style="padding:14px 16px;display:grid;grid-template-columns:1fr 1fr;gap:40px;font-size:11px"><div style="border-top:1px solid #333;padding-top:8px;text-align:center">Employee Signature</div><div style="border-top:1px solid #333;padding-top:8px;text-align:center">Management</div></div></div>';
 }
@@ -217,7 +231,7 @@ function Login({onLogin}){
         <div style={{textAlign:"center",marginBottom:28}}>
           <div style={{fontSize:50}}>⚡</div>
           <div style={{fontSize:22,fontWeight:900,color:"#e2e8f0",marginTop:6}}>سيدرة إليكتريك</div>
-          <div style={{fontSize:12,color:"#94a3b8"}}>Sedra Electric — HR ERP v7.0</div>
+          <div style={{fontSize:12,color:"#94a3b8"}}>Sedra Electric — HR ERP v7.1</div>
         </div>
         <label style={{display:"block",fontSize:11,color:"#94a3b8",marginBottom:10}}>User Role
           <select value={role} onChange={e=>setRole(e.target.value)} style={{...cs.inp,marginTop:4}}>
@@ -369,11 +383,20 @@ function Attendance({emps,att,setEmpAtt,addLog}){
   const [y,setY]=useState(now_.getFullYear());
   const [m,setM]=useState(now_.getMonth()+1);
   const [vm,setVm]=useState("grid");
+  // FIX 5: track fill select value per employee to reset it after fill
+  const [fillVals,setFillVals]=useState({});
   const days=nDays(y,m);
   const DA=Array.from({length:days},(_,i)=>i+1);
   const gc=(id,d)=>((att[moKey(y,m)]||{})[id]||{})[String(d)]||"";
   const sc=(id,d,code)=>{const cur=((att[moKey(y,m)]||{})[id]||{});setEmpAtt(y,m,id,{...cur,[String(d)]:code});};
-  function fill(id,code){const map={};for(let d=1;d<=days;d++)map[String(d)]=wDay(y,m,d)===0?"O":code;setEmpAtt(y,m,id,map);addLog("Att Fill",id+" → "+code+" "+moKey(y,m));}
+  function fill(id,code){
+    const map={};
+    for(let d=1;d<=days;d++)map[String(d)]=wDay(y,m,d)===0?"O":code;
+    setEmpAtt(y,m,id,map);
+    addLog("Att Fill",id+" → "+code+" "+moKey(y,m));
+    // FIX 5: reset this employee's fill select back to blank
+    setFillVals(p=>({...p,[id]:""}));
+  }
   const cnt=(id,k)=>Object.values(((att[moKey(y,m)]||{})[id])||{}).filter(v=>v===k).length;
   return (
     <div>
@@ -400,7 +423,11 @@ function Attendance({emps,att,setEmpAtt,addLog}){
               <tr key={emp.id}>
                 <td style={{...cs.td,position:"sticky",left:0,background:"#1e293b",fontWeight:600,minWidth:150,zIndex:1}}>{emp.name.split(" ").slice(0,2).join(" ")}</td>
                 <td style={{...cs.td,textAlign:"center"}}>
-                  <select onChange={e=>{if(e.target.value)fill(emp.id,e.target.value);}} style={{...cs.inp,width:46,padding:"2px",fontSize:10}}>
+                  {/* FIX 5: controlled select with per-employee value, resets to "" after fill */}
+                  <select
+                    value={fillVals[emp.id]||""}
+                    onChange={e=>{if(e.target.value)fill(emp.id,e.target.value);}}
+                    style={{...cs.inp,width:46,padding:"2px",fontSize:10}}>
                     <option value="">—</option>
                     {CKEYS.map(k=><option key={k} value={k}>{k}</option>)}
                   </select>
@@ -462,7 +489,6 @@ function DeductionsTab({emps,deds,setDeds,role,addLog,setSlip}){
         {can(role,"deductions")&&<button style={Btn("#7c3aed")} onClick={()=>{setForm(blankD);setShow(true);}}>➕ Add Deduction</button>}
         <span style={{marginLeft:"auto",color:"#f59e0b",fontWeight:700,fontSize:13}}>Active: {money(totalActive)}</span>
       </div>
-
       {show&&(
         <div style={{...cs.card,border:"1px solid #7c3aed",marginBottom:14}}>
           <div style={{fontWeight:700,marginBottom:12,color:"#c4b5fd",fontSize:14}}>💸 New Financial Deduction</div>
@@ -500,7 +526,6 @@ function DeductionsTab({emps,deds,setDeds,role,addLog,setSlip}){
           </div>
         </div>
       )}
-
       <table style={{width:"100%",borderCollapse:"collapse"}}>
         <thead><tr>{["Employee","Type","Amount","Month","Date","Reason","Status",""].map(h=><th key={h} style={cs.th}>{h}</th>)}</tr></thead>
         <tbody>
@@ -635,8 +660,12 @@ function Salary({emps,att,adj,getAdj,setAdjK,setSlip,role,getCarFines,addLog,war
   const visibleEmps=role==="hr"?emps.filter(e=>(+e.total||0)<=4000):emps;
   const rows=visibleEmps.map(emp=>{
     const attMap=(att[moKey(y,m)]||{})[emp.id];
-    const carF=getCarFines(emp.id,y,m);
-    const adjData={...getAdj(y,m,emp.id),carFines:(getAdj(y,m,emp.id).carFines||0)+(carF||0)};
+    const autoCarF=getCarFines(emp.id,y,m);
+    const savedAdj=getAdj(y,m,emp.id);
+    // FIX 6: Car Fines Override now truly overrides auto-calc fines.
+    // If a manual override is entered (non-empty, non-zero), use it; otherwise use auto-calculated fines.
+    const carFinesVal=(savedAdj.carFines!==""&&savedAdj.carFines!=null&&+savedAdj.carFines>0)?+savedAdj.carFines:autoCarF;
+    const adjData={...savedAdj,carFines:carFinesVal};
     const pr=salaryCalc(emp,attMap,y,m,adjData,getWarnDed(emp.id),getDedAmt(emp.id));
     return{emp,pr};
   });
@@ -659,7 +688,7 @@ function Salary({emps,att,adj,getAdj,setAdjK,setSlip,role,getCarFines,addLog,war
         <div style={{...cs.card,border:"1px solid #2563eb",marginBottom:12}}>
           <div style={{fontWeight:700,marginBottom:10,color:"#60a5fa"}}>⚙️ Salary Adjustments — {selEmp.name} ({MN[m-1]} {y})</div>
           <div style={{...cs.card,background:"#0f2030",border:"1px solid #334155",padding:"8px 12px",fontSize:11,color:"#94a3b8",marginBottom:10}}>
-            These adjustments are saved per employee per month and will appear on the salary slip. Use "Deductions" tab for permanent tracked deductions.
+            These adjustments are saved per employee per month and will appear on the salary slip. "Car Fines Override" replaces the auto-calculated car fines; leave blank to use auto-calc. Use "Deductions" tab for permanent tracked deductions.
           </div>
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(190px,1fr))",gap:8}}>
             {AJ.map(f=>(
@@ -718,10 +747,11 @@ function Salary({emps,att,adj,getAdj,setAdjK,setSlip,role,getCarFines,addLog,war
 function Cars({cars,setCars,emps,role,addLog}){
   const now_=new Date();
   const blankC={id:"",plate:"",make:"",model:"",year:"",empId:"",regExp:"",insExp:"",color:"",fines:[]};
-  const blankF={id:0,date:todayISO(),amount:"",desc:"",month:moKey(now_.getFullYear(),now_.getMonth()+1),paid:false};
+  // FIX 7: moved blankF to a factory function so reset always gets today's date
+  const newBlankF=()=>({id:0,date:todayISO(),amount:"",desc:"",month:moKey(now_.getFullYear(),now_.getMonth()+1),paid:false});
   const [form,setForm]=useState(blankC);
   const [showForm,setShowForm]=useState(false);
-  const [fineForm,setFineForm]=useState(blankF);
+  const [fineForm,setFineForm]=useState(newBlankF());
   const [showFine,setShowFine]=useState(null);
   const setF=(k,v)=>setForm(p=>({...p,[k]:v}));
   function saveCar(){
@@ -732,7 +762,10 @@ function Cars({cars,setCars,emps,role,addLog}){
   function addFine(carId){
     if(!fineForm.amount||!fineForm.desc){alert("Fill amount and description");return;}
     setCars(p=>p.map(c=>c.id!==carId?c:{...c,fines:[...(c.fines||[]),{...fineForm,id:Date.now()}]}));
-    addLog("Car Fine Added",fineForm.desc+" "+fineForm.amount+" AED");setShowFine(null);
+    addLog("Car Fine Added",fineForm.desc+" "+fineForm.amount+" AED");
+    setShowFine(null);
+    // FIX 7: reset fine form after adding so stale data doesn't persist
+    setFineForm(newBlankF());
   }
   const CF=[["id","Car ID"],["plate","Plate No"],["make","Make"],["model","Model"],["year","Year"],["color","Color"],["regExp","Reg. Exp","date"],["insExp","Ins. Exp","date"]];
   return (
@@ -765,7 +798,7 @@ function Cars({cars,setCars,emps,role,addLog}){
               </div>
               <div style={{display:"flex",gap:6}}>
                 <button style={{...Btn("#1e3a5f"),fontSize:11}} onClick={()=>{setForm({...blankC,...car});setShowForm(true);}}>✏️</button>
-                <button style={{...Btn("#166534"),fontSize:11}} onClick={()=>setShowFine(car.id)}>+ Fine</button>
+                <button style={{...Btn("#166534"),fontSize:11}} onClick={()=>{setFineForm(newBlankF());setShowFine(car.id);}}>+ Fine</button>
                 <button style={{...Btn("#7f1d1d"),fontSize:11}} onClick={()=>{if(window.confirm("Delete?"))setCars(p=>p.filter(c=>c.id!==car.id));}}>🗑</button>
               </div>
             </div>
@@ -780,7 +813,8 @@ function Cars({cars,setCars,emps,role,addLog}){
                 </div>
                 <div style={{display:"flex",gap:8,marginTop:8}}>
                   <button style={Btn("#f97316")} onClick={()=>addFine(car.id)}>Add Fine</button>
-                  <button style={Btn("#475569")} onClick={()=>setShowFine(null)}>Cancel</button>
+                  {/* FIX 7: also reset fine form on cancel */}
+                  <button style={Btn("#475569")} onClick={()=>{setShowFine(null);setFineForm(newBlankF());}}>Cancel</button>
                 </div>
               </div>
             )}
@@ -815,7 +849,8 @@ function Cars({cars,setCars,emps,role,addLog}){
 }
 
 /* ═══ LEAVES ═══ */
-function Leaves({emps,leaves,setLeaves,addLog}){
+// FIX 8: added `role` to Leaves props so delete button can be restricted to owner
+function Leaves({emps,leaves,setLeaves,role,addLog}){
   const blank={id:0,empId:"",type:"annual",from:"",to:"",days:0,useTicket:false,lateDays:0};
   const [form,setForm]=useState(blank);
   const [show,setShow]=useState(false);
@@ -862,7 +897,8 @@ function Leaves({emps,leaves,setLeaves,addLog}){
                 <td style={cs.td}>{fmt(l.from)}</td><td style={cs.td}>{fmt(l.to)}</td>
                 <td style={cs.td}>{l.days}</td><td style={cs.td}>{l.useTicket?"✈️":"—"}</td>
                 <td style={cs.td}>{l.lateDays||"—"}</td>
-                <td style={cs.td}><button style={{...Btn("#7f1d1d"),fontSize:11}} onClick={()=>setLeaves(p=>p.filter(x=>x.id!==l.id))}>🗑</button></td>
+                {/* FIX 8: only owner can delete leave records */}
+                <td style={cs.td}>{role==="owner"&&<button style={{...Btn("#7f1d1d"),fontSize:11}} onClick={()=>setLeaves(p=>p.filter(x=>x.id!==l.id))}>🗑</button>}</td>
               </tr>
             );
           })}
@@ -889,6 +925,12 @@ function EOSB({emps,setSlip,addLog}){
       </div>
       {emp&&res&&(res.ok?(
         <div style={{marginTop:16}}>
+          {/* FIX 3c: show resignation fraction info in the calculator UI */}
+          {type==="res"&&res.yrs<5&&(
+            <div style={{...cs.card,background:"#431407",border:"1px solid #ea580c",padding:"8px 14px",fontSize:12,color:"#fed7aa",marginBottom:10}}>
+              ℹ️ Resignation fraction applied: {res.yrs<3?"1/3 (service 1–3 years)":"2/3 (service 3–5 years)"}
+            </div>
+          )}
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(170px,1fr))",gap:8}}>
             {[["Employee",emp.name],["Basic",money(+emp.basic)],["Start",fmt(emp.start)],["End",fmt(endDate)],["Years",res.yrs.toFixed(2)+" yrs"],["Daily",money(res.d)],["EOSB",money(res.amount)],["Capped?",res.capped?"⚠️ Yes":"No"]].map(it=>(
               <div key={it[0]} style={{...cs.card,padding:10}}><div style={{fontSize:10,color:"#94a3b8"}}>{it[0]}</div><div style={{fontWeight:700,fontSize:13,color:"#c4b5fd"}}>{it[1]}</div></div>
@@ -955,7 +997,7 @@ function AuditLog({logs}){
 /* ═══ EXPORT ═══ */
 function ExportData({emps,att,leaves,cars,adj,warnings,deds,setEmps,setAtt,setLeaves,setCars,setAdj,setWarnings,setDeds}){
   function dl(){
-    const data={employees:emps,attendance:att,leaves,cars,adjustments:adj,warnings,deductions:deds,exportedAt:nowStr(),version:"v7.0"};
+    const data={employees:emps,attendance:att,leaves,cars,adjustments:adj,warnings,deductions:deds,exportedAt:nowStr(),version:"v7.1"};
     const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});
     const url=URL.createObjectURL(blob);
     const a=document.createElement("a");a.href=url;a.download="sedra_hr_"+todayISO()+".json";a.click();URL.revokeObjectURL(url);
@@ -1036,7 +1078,6 @@ export default function App(){
   const [syncOk,setSyncOk]=useState(false);
   const [saving,setSaving]=useState(false);
 
-  // Load data — Supabase first, localStorage fallback, SEED only if truly empty
   useEffect(()=>{
     (async()=>{
       let sbOk=false;
@@ -1056,7 +1097,6 @@ export default function App(){
         }
       }catch(e){}
       if(!sbOk){
-        // fallback to localStorage
         const le=await SB.get("se_emps");setEmps(le&&le.length>0?le:SEED_EMPS);
         setAtt((await SB.get("se_att"))||{});
         setLeaves((await SB.get("se_leaves"))||[]);
@@ -1073,10 +1113,11 @@ export default function App(){
     })();
   },[]);
 
-  // Auto-sync every 20 seconds
   useEffect(()=>{
     if(!loaded)return;
     const iv=setInterval(async()=>{
+      // FIX 9: skip auto-sync while a manual save is in progress to prevent race condition
+      if(saving)return;
       try{
         const all=await SB.getAll();
         if(all&&Object.keys(all).length>0){
@@ -1094,9 +1135,8 @@ export default function App(){
       }catch(e){setSyncOk(false);}
     },20000);
     return()=>clearInterval(iv);
-  },[loaded]);
+  },[loaded,saving]);
 
-  // Save on change — localStorage immediately, Supabase async
   useEffect(()=>{if(loaded)SB.set("se_emps",emps);},[emps,loaded]);
   useEffect(()=>{if(loaded)SB.set("se_att",att);},[att,loaded]);
   useEffect(()=>{if(loaded)SB.set("se_leaves",leaves);},[leaves,loaded]);
@@ -1151,7 +1191,7 @@ export default function App(){
       <div style={cs.hdr}>
         <div>
           <div style={{fontSize:19,fontWeight:900,letterSpacing:.5}}>⚡ سيدرة إليكتريك — Sedra Electric</div>
-          <div style={{fontSize:11,opacity:.7}}>HR ERP v7.0 — Multi-Device Sync</div>
+          <div style={{fontSize:11,opacity:.7}}>HR ERP v7.1 — Multi-Device Sync</div>
         </div>
         <div style={{display:"flex",alignItems:"center",gap:10}}>
           <div style={{textAlign:"center",fontSize:11}}>
@@ -1172,7 +1212,7 @@ export default function App(){
         {tab==="dashboard"&&<Dashboard emps={emps} att={att} leaves={leaves} warnings={warnings} deds={deds} logs={logs} role={role} lastSync={lastSync} syncOk={syncOk}/>}
         {tab==="employees"&&<Employees emps={emps} setEmps={setEmps} role={role} addLog={addLog}/>}
         {tab==="attendance"&&<Attendance emps={active} att={att} setEmpAtt={setEmpAtt} addLog={addLog}/>}
-        {tab==="salary"&&can(role,"salary")&&<Salary emps={active} att={att} adj={adj} getAdj={getAdj} setAdjK={setAdjK} setSlip={setSlip} role={role} getCarFines={getCarFines} addLog={addLog} warnings={warnings} deds={deds} payStatus={payStatus} setPayStatus={setPayStatus}/>}
+        {tab==="salary"&&can(role,"salary")&&<Salary emps={active} att={att} adj={adj} getAdj={getAdj} setAdjK={setAdjK} setSlip={setSlip} role={role} getCarFines={getCarFines} addLog={addLog} warnings={warnings} deds={deds}/>}
         {tab==="deductions"&&can(role,"deductions")&&<DeductionsTab emps={emps} deds={deds} setDeds={setDeds} role={role} addLog={addLog} setSlip={setSlip}/>}
         {tab==="warnings"&&can(role,"warnings")&&<Warnings emps={emps} warnings={warnings} setWarnings={setWarnings} role={role} addLog={addLog} setSlip={setSlip}/>}
         {tab==="leaves"&&can(role,"leaveMgr")&&<Leaves emps={emps} leaves={leaves} setLeaves={setLeaves} role={role} addLog={addLog}/>}

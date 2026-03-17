@@ -46,48 +46,61 @@ function canSeeSalary(role,total){
 }
 
 /*
-  OT RULES (company policy):
-  - Absent/Late deduction daily rate = total salary / 30  (NOT basic)
-  - Normal weekday OT (Sun–Thu):  1.5x per hour  (adj.otRate overrides, default 1.5)
-  - Friday + Saturday OT:         2x daily pay   ("friday & saturday = 2 days")
-  - Sunday OT (if worked):        2x hourly rate ("sunday by 2x")
-  - Official holiday OT:          2x daily pay
+  PAYROLL RULES (Sedra Electric policy):
+  ─────────────────────────────────────────────────────────────────
+  DEDUCTIONS:
+  • Daily rate = Total Salary ÷ actual working days in month
+    (working day = any day that is NOT Sunday AND NOT marked H/O)
+    → Full month absent = FULL salary deducted (net = 0)
+  • Absent day       = 1 full daily rate
+  • Late < 2h (L1)  = 0.25 × daily rate
+  • Late > 2h (L2)  = 0.50 × daily rate
+
+  OVERTIME:
+  • Mon–Thu & Sat normal OT  → 1.5× hourly  (adj.otRate overrides)
+  • Friday OT                → 2× daily pay
+  • Saturday OT              → 2× daily pay  ("saturday = 2 days")
+  • Sunday OT (called in)    → 2× daily pay  ("sunday by 2")
+  • Official Holiday OT      → 2× daily pay
+  ─────────────────────────────────────────────────────────────────
 */
 function salaryCalc(emp,attMap,y,m,adj,warnDed,extraDed){
   if(!adj)adj={};
   const gross=(+emp.total>0)?+emp.total:((+emp.basic||0)+(+emp.housing||0)+(+emp.transport||0));
-  if(!gross)return{gross:0,net:0,absD:0,lateD:0,otAmt:0,otNorm:0,otSpec:0,A:0,L1:0,L2:0,P:0,OTn:0,OTs:0,S:0,daily:0,hourly:0,fines:0,bonus:0,ded:0,warnDed:0,extraDed:0};
+  if(!gross)return{gross:0,net:0,absD:0,lateD:0,otAmt:0,otNorm:0,otSpec:0,A:0,L1:0,L2:0,P:0,OTn:0,OTs:0,S:0,workDays:0,daily:0,hourly:0,fines:0,bonus:0,ded:0,warnDed:0,extraDed:0};
 
-  // KEY FIX 1: use TOTAL salary for daily/hourly rate (not basic)
-  const daily=gross/30, hourly=daily/8;
+  // Step 1: count actual working days in the month
+  // A working day is any calendar day that is not Sunday (0) and not Holiday/Off by default
+  // We count all non-Sunday days as potential working days
+  let workDays=0;
+  for(let d=1;d<=nDays(y,m);d++){
+    if(wDay(y,m,d)!==0) workDays++; // every non-Sunday counts
+  }
+
+  // KEY FIX: daily rate = gross / workDays  → full absent month = full gross deducted
+  const daily=gross/workDays, hourly=daily/8;
 
   let P=0,A=0,L1=0,L2=0,OTn=0,OTs=0,S=0;
-  // OTn = normal weekday OT (1.5x), OTs = special day OT (Fri/Sat/Sun/Holiday, 2x)
 
   for(let d=1;d<=nDays(y,m);d++){
-    const dow=wDay(y,m,d); // 0=Sun,1=Mon,…,5=Fri,6=Sat
+    const dow=wDay(y,m,d); // 0=Sun,1=Mon,2=Tue,3=Wed,4=Thu,5=Fri,6=Sat
     const code=(attMap&&attMap[String(d)])||"";
 
-    // Sunday = off by default; but if marked OT → special 2x
-    if(dow===0){
-      if(code==="OT")OTs++;
-      continue;
-    }
+    // Sunday: off by default, OT = 2× special
+    if(dow===0){ if(code==="OT")OTs++; continue; }
 
-    if(code==="H"){
-      // Official holiday: if marked OT = 2x special
-      // (H alone = off, no deduction)
-      continue;
-    }
-    if(code==="O")continue;
+    // Holiday/Off: no deduction; OT on holiday = 2× special
+    if(code==="H"){ if(code==="OT")OTs++; continue; }
+    if(code==="O") continue;
 
-    if(code==="A")A++;
+    // Normal working days
+    if(code==="A") A++;
     else if(code==="L1"){P++;L1++;}
     else if(code==="L2"){P++;L2++;}
     else if(code==="OT"){
       P++;
-      // KEY FIX 2: Fri(5) and Sat(6) OT = 2x special; other days = 1.5x normal
-      if(dow===5||dow===6)OTs++;
+      // Fri(5) or Sat(6) OT = 2× special; all other days = 1.5× normal
+      if(dow===5||dow===6) OTs++;
       else OTn++;
     }
     else if(code==="S"){P++;S++;}
@@ -97,24 +110,23 @@ function salaryCalc(emp,attMap,y,m,adj,warnDed,extraDed){
   const absD=A*daily;
   const lateD=(L1*0.25+L2*0.5)*daily;
 
-  // Normal weekday OT: (manual extra hours + OTn days × 2h) × hourly × 1.5
-  const normRate=+adj.otRate||1.5; // default changed to 1.5x
+  // Normal OT: extra manual hours + OTn days × 2h per day, at 1.5× (or override)
+  const normRate=+(adj.otRate)||1.5;
   const normH=(+adj.otH||0)+(OTn*2);
   const otNorm=normH*hourly*normRate;
 
-  // Special OT (Fri/Sat/Sun/Holiday): each day = 2× daily pay
-  // The employee's gross already covers regular days; we add 1 extra daily per special OT day
-  const otSpec=OTs*daily*2; // full 2-day pay for each special OT day
+  // Special OT (Fri/Sat/Sun/Holiday): 2× full daily pay per day
+  const otSpec=OTs*daily*2;
 
   const otAmt=otNorm+otSpec;
   const bonus=+adj.bonus||0,ded=+adj.ded||0,fines=+adj.carFines||0;
   const wd=+warnDed||0,ed=+extraDed||0;
+  const net=Math.max(0,gross-absD-lateD)+otAmt+bonus-ded-fines-wd-ed;
 
   return{
-    gross,net:gross-absD-lateD+otAmt+bonus-ded-fines-wd-ed,
-    absD,lateD,otAmt,otNorm,otSpec,
+    gross,net,absD,lateD,otAmt,otNorm,otSpec,
     A,L1,L2,P,OTn,OTs,OT:OTn+OTs,S,
-    daily,hourly,fines,bonus,ded,warnDed:wd,extraDed:ed
+    workDays,daily,hourly,fines,bonus,ded,warnDed:wd,extraDed:ed
   };
 }
 
@@ -197,8 +209,15 @@ const SEED_CARS=[
 const WARN_TYPES=["Bad Attitude","Policy Violation","Absent Without Notice","Late Repeatedly","Misconduct","Safety Violation","Other"];
 const DED_TYPES=["Salary Deduction","Advance Recovery","Loan Installment","Equipment Damage","Absence Fine","Uniform/PPE","Policy Violation Fine","Other"];
 
+/* inject full-screen reset so Vercel deployment fills the whole browser window */
+if(typeof document!=="undefined"){
+  const s=document.createElement("style");
+  s.textContent="html,body{margin:0;padding:0;width:100%;min-height:100vh;background:#0f172a;overflow-x:hidden;}#root{width:100%;}";
+  document.head.appendChild(s);
+}
+
 const cs={
-  page:{minHeight:"100vh",background:"#0f172a",color:"#e2e8f0",fontFamily:"Arial,sans-serif",fontSize:13},
+  page:{minHeight:"100vh",width:"100%",background:"#0f172a",color:"#e2e8f0",fontFamily:"Arial,sans-serif",fontSize:13,boxSizing:"border-box"},
   hdr:{background:"linear-gradient(135deg,#1e3a5f,#1d4ed8)",padding:"12px 20px",display:"flex",justifyContent:"space-between",alignItems:"center"},
   card:{background:"#1e293b",borderRadius:10,padding:16,marginBottom:12,border:"1px solid #334155"},
   inp:{width:"100%",background:"#0f172a",border:"1px solid #334155",borderRadius:6,padding:"7px 10px",color:"#e2e8f0",fontSize:12},
@@ -437,7 +456,7 @@ function Attendance({emps,att,setEmpAtt,addLog}){
 }
 
 /* ══════════════════════════════════════════
-   SALARY TAB — with full Pay Status system
+   SALARY TAB — Pay Status + Filters + Sorting
 ══════════════════════════════════════════ */
 function Salary({emps,att,adj,getAdj,setAdjK,setSlip,role,getCarFines,addLog,warnings,deds,payStatus,setPayStatus}){
   const now_=new Date();
@@ -445,21 +464,22 @@ function Salary({emps,att,adj,getAdj,setAdjK,setSlip,role,getCarFines,addLog,war
   const [m,setM]=useState(now_.getMonth()+1);
   const [selId,setSelId]=useState(null);
   const [selected,setSelected]=useState(new Set());
-  const [payFilter,setPayFilter]=useState("all"); // "all" | "unpaid" | "paid"
+  const [payFilter,setPayFilter]=useState("all");
+  const [filterLoc,setFilterLoc]=useState("");
+  const [filterDept,setFilterDept]=useState("");
+  const [sortBy,setSortBy]=useState("officefirst"); // default: office first then site
 
   const mk=moKey(y,m);
   const selEmp=emps.find(e=>e.id===selId)||null;
   const selAdj=selEmp?getAdj(y,m,selId):{};
-  const AJ=[["otH","Extra OT Hours"],["otRate","OT Rate (×1.25 default)"],["bonus","Bonus (AED)"],["ded","Manual Deduction (AED)"],["carFines","Car Fines Override (AED)"]];
+  const AJ=[["otH","Extra OT Hours"],["otRate","OT Rate (×1.5 default)"],["bonus","Bonus (AED)"],["ded","Manual Deduction (AED)"],["carFines","Car Fines Override (AED)"]];
 
   const isPaid=(empId)=>!!((payStatus||{})[mk]||{})[empId];
-
   function togglePay(empId){
     const paid=isPaid(empId);
     setPayStatus(p=>({...p,[mk]:{...(p[mk]||{}),[empId]:!paid}}));
     addLog(paid?"Salary Unpaid":"Salary Paid",empId+" — "+mk);
   }
-
   function bulkPay(ids,paid){
     if(!ids.length)return;
     const upd={...(payStatus[mk]||{})};
@@ -468,13 +488,13 @@ function Salary({emps,att,adj,getAdj,setAdjK,setSlip,role,getCarFines,addLog,war
     addLog(paid?"Bulk Paid":"Bulk Unpaid",ids.length+" staff — "+mk);
     setSelected(new Set());
   }
-
   function getWarnDed(empId){return warnings.filter(w=>w.empId===empId&&w.month===mk&&w.status==="active"&&w.amount>0).reduce((s,w)=>s+(+w.amount||0),0);}
   function getDedAmt(empId){return deds.filter(d=>d.empId===empId&&d.month===mk&&d.status==="active").reduce((s,d)=>s+(+d.amount||0),0);}
 
-  const visibleEmps=role==="hr"?emps.filter(e=>(+e.total||0)<=4000):emps;
+  const baseEmps=role==="hr"?emps.filter(e=>(+e.total||0)<=4000):emps;
 
-  const allRows=visibleEmps.map(emp=>{
+  // Build all rows with calc
+  const allRows=baseEmps.map(emp=>{
     const attMap=(att[mk]||{})[emp.id];
     const savedAdj=getAdj(y,m,emp.id);
     const autoCarF=getCarFines(emp.id,y,m);
@@ -483,67 +503,160 @@ function Salary({emps,att,adj,getAdj,setAdjK,setSlip,role,getCarFines,addLog,war
     return{emp,pr,paid:isPaid(emp.id)};
   });
 
-  const filteredRows=allRows.filter(r=>payFilter==="paid"?r.paid:payFilter==="unpaid"?!r.paid:true);
+  // Unique filter options
+  const locs=[...new Set(baseEmps.map(e=>e.loc||"").filter(Boolean))].sort();
+  const depts=[...new Set(baseEmps.map(e=>e.dept||"").filter(Boolean))].sort();
+
+  // Apply filters
+  const filteredRows=allRows
+    .filter(r=>{
+      if(payFilter==="paid"&&!r.paid)return false;
+      if(payFilter==="unpaid"&&r.paid)return false;
+      if(filterLoc&&(r.emp.loc||"")!==filterLoc)return false;
+      if(filterDept&&(r.emp.dept||"")!==filterDept)return false;
+      return true;
+    })
+    .sort((a,b)=>{
+      if(sortBy==="net")return b.pr.net-a.pr.net;
+      if(sortBy==="dept")return(a.emp.dept||"").localeCompare(b.emp.dept||"");
+      if(sortBy==="loc")return(a.emp.loc||"").localeCompare(b.emp.loc||"");
+      if(sortBy==="status")return(a.paid===b.paid)?0:a.paid?1:-1;
+      if(sortBy==="officefirst"){
+        // Office → Site → everything else, then alphabetical within group
+        const rank=l=>l==="Office"?0:l==="Site"?1:2;
+        const ra=rank(a.emp.loc||""),rb=rank(b.emp.loc||"");
+        if(ra!==rb)return ra-rb;
+        return a.emp.name.localeCompare(b.emp.name);
+      }
+      return a.emp.name.localeCompare(b.emp.name);
+    });
+
   const paidRows=allRows.filter(r=>r.paid);
   const unpaidRows=allRows.filter(r=>!r.paid);
   const paidTotal=paidRows.reduce((s,r)=>s+r.pr.net,0);
   const unpaidTotal=unpaidRows.reduce((s,r)=>s+r.pr.net,0);
   const grandTotal=allRows.reduce((s,r)=>s+r.pr.net,0);
-
   const visIds=filteredRows.map(r=>r.emp.id);
   const allSel=visIds.length>0&&visIds.every(id=>selected.has(id));
+  const hasFilters=payFilter!=="all"||filterLoc||filterDept;
 
   return(
     <div>
-      {/* Month selector */}
-      <div style={{display:"flex",gap:10,marginBottom:14,flexWrap:"wrap",alignItems:"center"}}>
-        <select value={m} onChange={e=>{setM(+e.target.value);setSelected(new Set());}} style={{...cs.inp,width:140}}>
+      {/* ── Month / Year ── */}
+      <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap",alignItems:"center"}}>
+        <select value={m} onChange={e=>{setM(+e.target.value);setSelected(new Set());}} style={{...cs.inp,width:130}}>
           {MN.map((mn,i)=><option key={i} value={i+1}>{mn}</option>)}
         </select>
-        <input type="number" value={y} onChange={e=>{setY(+e.target.value);setSelected(new Set());}} style={{...cs.inp,width:90}}/>
+        <input type="number" value={y} onChange={e=>{setY(+e.target.value);setSelected(new Set());}} style={{...cs.inp,width:86}}/>
         <span style={{marginLeft:"auto",color:"#22c55e",fontWeight:700,fontSize:14}}>Grand Total: {money(grandTotal)}</span>
       </div>
 
-      {/* ── Pay Status Summary Cards ── */}
-      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,marginBottom:14}}>
-        <div style={{...cs.card,marginBottom:0,padding:"12px 16px",borderTop:"3px solid #3b82f6"}}>
-          <div style={{fontSize:11,color:"#94a3b8",marginBottom:4}}>👥 Total Staff</div>
-          <div style={{fontSize:28,fontWeight:900,color:"#3b82f6"}}>{allRows.length}</div>
-          <div style={{fontSize:11,color:"#64748b",marginTop:2}}>{money(grandTotal)}</div>
-        </div>
-        <div style={{...cs.card,marginBottom:0,padding:"12px 16px",borderTop:"3px solid #22c55e"}}>
-          <div style={{fontSize:11,color:"#94a3b8",marginBottom:4}}>✅ Salaries Paid</div>
-          <div style={{fontSize:28,fontWeight:900,color:"#22c55e"}}>{paidRows.length}</div>
-          <div style={{fontSize:11,color:"#22c55e",marginTop:2}}>{money(paidTotal)}</div>
-        </div>
-        <div style={{...cs.card,marginBottom:0,padding:"12px 16px",borderTop:"3px solid #f97316"}}>
-          <div style={{fontSize:11,color:"#94a3b8",marginBottom:4}}>⏳ Awaiting Payment</div>
-          <div style={{fontSize:28,fontWeight:900,color:"#f97316"}}>{unpaidRows.length}</div>
-          <div style={{fontSize:11,color:"#f97316",marginTop:2}}>{money(unpaidTotal)}</div>
+      {/* ── Financial Summary Bar ── */}
+      <div style={{...cs.card,background:"#0a1628",border:"2px solid #1d4ed8",padding:"14px 18px",marginBottom:12}}>
+        <div style={{fontSize:11,color:"#94a3b8",marginBottom:10,fontWeight:700,letterSpacing:1}}>💼 {MN[m-1]} {y} — SALARY SUMMARY</div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:10}}>
+          {/* Grand Total */}
+          <div style={{background:"#1e293b",borderRadius:8,padding:"10px 14px",borderLeft:"4px solid #3b82f6"}}>
+            <div style={{fontSize:10,color:"#94a3b8",marginBottom:4}}>📊 GRAND TOTAL PAYROLL</div>
+            <div style={{fontSize:22,fontWeight:900,color:"#3b82f6"}}>{money(grandTotal)}</div>
+            <div style={{fontSize:10,color:"#64748b",marginTop:2}}>{allRows.length} employees</div>
+          </div>
+          {/* Paid */}
+          <div style={{background:"#071a0f",borderRadius:8,padding:"10px 14px",borderLeft:"4px solid #22c55e"}}>
+            <div style={{fontSize:10,color:"#94a3b8",marginBottom:4}}>✅ AMOUNT PAID</div>
+            <div style={{fontSize:22,fontWeight:900,color:"#22c55e"}}>{money(paidTotal)}</div>
+            <div style={{fontSize:10,color:"#22c55e",marginTop:2}}>{paidRows.length} employees paid</div>
+          </div>
+          {/* Remaining */}
+          <div style={{background:"#1a0800",borderRadius:8,padding:"10px 14px",borderLeft:"4px solid #f97316"}}>
+            <div style={{fontSize:10,color:"#94a3b8",marginBottom:4}}>⏳ REMAINING TO PAY</div>
+            <div style={{fontSize:22,fontWeight:900,color:"#f97316"}}>{money(unpaidTotal)}</div>
+            <div style={{fontSize:10,color:"#f97316",marginTop:2}}>{unpaidRows.length} employees pending</div>
+          </div>
+          {/* Progress bar */}
+          <div style={{background:"#1e293b",borderRadius:8,padding:"10px 14px",borderLeft:"4px solid #a78bfa",display:"flex",flexDirection:"column",justifyContent:"space-between"}}>
+            <div style={{fontSize:10,color:"#94a3b8",marginBottom:6}}>📈 PAYMENT PROGRESS</div>
+            <div>
+              <div style={{fontSize:18,fontWeight:900,color:"#a78bfa",marginBottom:6}}>
+                {allRows.length>0?Math.round((paidRows.length/allRows.length)*100):0}%
+              </div>
+              <div style={{background:"#334155",borderRadius:99,height:8,overflow:"hidden"}}>
+                <div style={{height:"100%",borderRadius:99,background:"linear-gradient(90deg,#22c55e,#a78bfa)",width:(allRows.length>0?(paidRows.length/allRows.length)*100:0)+"%",transition:"width .4s"}}/>
+              </div>
+              <div style={{fontSize:9,color:"#64748b",marginTop:4}}>{paidRows.length} of {allRows.length} paid</div>
+            </div>
+          </div>
         </div>
       </div>
 
-      {/* ── Filter tabs + Pay All button ── */}
-      <div style={{display:"flex",gap:4,marginBottom:10,alignItems:"center",flexWrap:"wrap"}}>
-        <button style={TBtn(payFilter==="all")} onClick={()=>{setPayFilter("all");setSelected(new Set());}}>All ({allRows.length})</button>
-        <button style={TBtn(payFilter==="unpaid")} onClick={()=>{setPayFilter("unpaid");setSelected(new Set());}}>⏳ Unpaid ({unpaidRows.length})</button>
-        <button style={TBtn(payFilter==="paid")} onClick={()=>{setPayFilter("paid");setSelected(new Set());}}>✅ Paid ({paidRows.length})</button>
+      {/* ── Policy info bar ── */}
+      <div style={{...cs.card,background:"#0f2744",border:"1px solid #2563eb",padding:"8px 14px",marginBottom:10,fontSize:11}}>
+        📅 <b style={{color:"#60a5fa"}}>{MN[m-1]} {y}</b>
+        <span style={{color:"#94a3b8"}}> | Deduction rate: </span><b style={{color:"#f97316"}}>Total ÷ working days</b>
+        <span style={{color:"#94a3b8"}}> (full absent = full deduction) | OT: </span>
+        <span style={{color:"#86efac"}}>Mon–Thu 1.5×</span>
+        <span style={{color:"#94a3b8"}}> | </span>
+        <span style={{color:"#fcd34d"}}>Fri/Sat/Sun 2× daily</span>
+      </div>
+
+      {/* ── FILTERS ROW ── */}
+      <div style={{...cs.card,padding:"10px 14px",marginBottom:10,display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+        <span style={{fontSize:11,color:"#94a3b8",fontWeight:700,marginRight:4}}>🔽 Filters:</span>
+
+        {/* Pay status filter */}
+        <div style={{display:"flex",gap:2}}>
+          {[["all","All"],["unpaid","⏳ Unpaid"],["paid","✅ Paid"]].map(f=>(
+            <button key={f[0]} style={{...TBtn(payFilter===f[0]),borderRadius:6,fontSize:10,padding:"5px 10px"}} onClick={()=>{setPayFilter(f[0]);setSelected(new Set());}}>
+              {f[1]}{f[0]==="unpaid"?" ("+unpaidRows.length+")":f[0]==="paid"?" ("+paidRows.length+")":""}
+            </button>
+          ))}
+        </div>
+
+        {/* Location filter */}
+        <select value={filterLoc} onChange={e=>setFilterLoc(e.target.value)} style={{...cs.inp,width:130,fontSize:11}} title="Filter by location">
+          <option value="">📍 All Locations</option>
+          {locs.map(l=><option key={l} value={l}>{l}</option>)}
+        </select>
+
+        {/* Department filter */}
+        <select value={filterDept} onChange={e=>setFilterDept(e.target.value)} style={{...cs.inp,width:140,fontSize:11}} title="Filter by department">
+          <option value="">🏢 All Departments</option>
+          {depts.map(d=><option key={d} value={d}>{d}</option>)}
+        </select>
+
+        {/* Sort */}
+        <select value={sortBy} onChange={e=>setSortBy(e.target.value)} style={{...cs.inp,width:140,fontSize:11}} title="Sort by">
+          <option value="officefirst">Sort: Office → Site</option>
+          <option value="name">Sort: Name A→Z</option>
+          <option value="net">Sort: Net Salary ↓</option>
+          <option value="dept">Sort: Department</option>
+          <option value="loc">Sort: Location</option>
+          <option value="status">Sort: Unpaid First</option>
+        </select>
+
+        {/* Clear filters */}
+        {hasFilters&&(
+          <button style={{...Btn("#475569"),fontSize:10,padding:"5px 10px"}} onClick={()=>{setPayFilter("all");setFilterLoc("");setFilterDept("");setSelected(new Set());}}>✕ Clear</button>
+        )}
+
+        {/* Pay All Unpaid */}
         {can(role,"markPaid")&&unpaidRows.length>0&&(
-          <button style={{...Btn("#166534"),marginLeft:"auto",fontSize:11}} onClick={()=>{if(window.confirm("Mark ALL "+unpaidRows.length+" unpaid employees as paid?"))bulkPay(unpaidRows.map(r=>r.emp.id),true);}}>
+          <button style={{...Btn("#166534"),fontSize:11,marginLeft:"auto"}} onClick={()=>{if(window.confirm("Mark ALL "+unpaidRows.length+" unpaid as paid?"))bulkPay(unpaidRows.map(r=>r.emp.id),true);}}>
             ✅ Pay All Unpaid ({unpaidRows.length})
           </button>
         )}
       </div>
 
-      {/* ── Bulk action bar (shows when rows are checked) ── */}
+      {/* ── Bulk action bar ── */}
       {selected.size>0&&(
-        <div style={{...cs.card,background:"#0a2010",border:"2px solid #22c55e",padding:"10px 16px",marginBottom:10,display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+        <div style={{...cs.card,background:"#0a2010",border:"2px solid #22c55e",padding:"10px 14px",marginBottom:10,display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
           <span style={{color:"#22c55e",fontWeight:700}}>☑ {selected.size} selected</span>
           {can(role,"markPaid")&&<>
             <button style={Btn("#166534")} onClick={()=>bulkPay(Array.from(selected),true)}>✅ Mark as Paid</button>
             <button style={Btn("#7c2d12")} onClick={()=>bulkPay(Array.from(selected),false)}>↩ Mark as Unpaid</button>
           </>}
-          <button style={{...Btn("#334155"),marginLeft:"auto"}} onClick={()=>setSelected(new Set())}>✕ Clear Selection</button>
+          <span style={{color:"#64748b",fontSize:11}}>Total selected: {money(filteredRows.filter(r=>selected.has(r.emp.id)).reduce((s,r)=>s+r.pr.net,0))}</span>
+          <button style={{...Btn("#334155"),marginLeft:"auto"}} onClick={()=>setSelected(new Set())}>✕ Clear</button>
         </div>
       )}
 
@@ -562,92 +675,126 @@ function Salary({emps,att,adj,getAdj,setAdjK,setSlip,role,getCarFines,addLog,war
         </div>
       )}
 
-      {/* ── Main salary table ── */}
+      {/* Results count */}
+      <div style={{fontSize:11,color:"#64748b",marginBottom:6}}>
+        Showing <b style={{color:"#e2e8f0"}}>{filteredRows.length}</b> of {allRows.length} employees
+        {filterLoc&&<span> | 📍 {filterLoc}</span>}
+        {filterDept&&<span> | 🏢 {filterDept}</span>}
+      </div>
+
+      {/* ── Main Table ── */}
       <div style={{overflowX:"auto"}}>
-        <table style={{width:"100%",borderCollapse:"collapse",minWidth:1050}}>
+        <table style={{width:"100%",borderCollapse:"collapse",minWidth:1060}}>
           <thead>
             <tr>
-              <th style={{...cs.th,width:36,textAlign:"center"}}>
-                <input type="checkbox" checked={allSel} onChange={()=>{
-                  if(allSel){setSelected(p=>{const n=new Set(p);visIds.forEach(id=>n.delete(id));return n;});}
-                  else{setSelected(p=>{const n=new Set(p);visIds.forEach(id=>n.add(id));return n;});}
-                }}/>
+              <th style={{...cs.th,width:34,textAlign:"center"}}>
+                <input type="checkbox" checked={allSel} title="Select all visible"
+                  onChange={()=>{if(allSel){setSelected(p=>{const n=new Set(p);visIds.forEach(id=>n.delete(id));return n;});}
+                  else{setSelected(p=>{const n=new Set(p);visIds.forEach(id=>n.add(id));return n;});}}}/>
               </th>
-              {["Employee","Att.","Gross","Abs(-)","Late(-)","OT(+)","Bonus(+)","Fines(-)","Warn(-)","Ded(-)","NET","Status","Actions"].map(h=>(
-                <th key={h} style={cs.th}>{h}</th>
-              ))}
+              <th style={cs.th}>Employee</th>
+              <th style={cs.th}>Dept / Location</th>
+              <th style={cs.th}>Att.</th>
+              <th style={cs.th}>Gross</th>
+              <th style={cs.th}>Abs(-)</th>
+              <th style={cs.th}>Late(-)</th>
+              <th style={cs.th}>OT(+)</th>
+              <th style={cs.th}>Other Ded(-)</th>
+              <th style={{...cs.th,fontSize:13,color:"#34d399"}}>NET</th>
+              <th style={cs.th}>Pay Status</th>
+              <th style={cs.th}>Actions</th>
             </tr>
           </thead>
           <tbody>
             {filteredRows.length===0&&(
-              <tr><td colSpan={14} style={{...cs.td,textAlign:"center",color:"#475569",padding:24}}>No records match the selected filter.</td></tr>
+              <tr><td colSpan={12} style={{...cs.td,textAlign:"center",color:"#475569",padding:28}}>
+                No employees match the selected filters.
+                {hasFilters&&<span style={{color:"#2563eb",cursor:"pointer",marginLeft:8}} onClick={()=>{setPayFilter("all");setFilterLoc("");setFilterDept("");}}>Clear filters</span>}
+              </td></tr>
             )}
             {filteredRows.map(({emp:e,pr,paid})=>{
               const show=canSeeSalary(role,e.total);
-              const noAtt=pr.P===0&&pr.A===0&&pr.L1===0&&pr.L2===0;
+              const noAtt=pr.P===0&&pr.A===0&&pr.L1===0&&pr.L2===0&&pr.OT===0;
+              const totalDed=pr.ded+pr.fines+pr.warnDed+pr.extraDed;
               const isSel=selected.has(e.id);
+              const isFullAbsent=pr.A>0&&pr.net<=0;
               return(
                 <tr key={e.id} style={{
-                  background: paid?"#071a0f": isSel?"#162030":"#1e293b",
-                  borderLeft: paid?"3px solid #22c55e":"3px solid transparent",
-                  transition:"background .15s"
+                  background:paid?"#071a0f":isFullAbsent?"#1a0a0a":isSel?"#162030":"#1e293b",
+                  borderLeft:paid?"3px solid #22c55e":isFullAbsent?"3px solid #ef4444":"3px solid transparent",
                 }}>
                   <td style={{...cs.td,textAlign:"center"}}>
                     <input type="checkbox" checked={isSel} onChange={()=>setSelected(p=>{const n=new Set(p);n.has(e.id)?n.delete(e.id):n.add(e.id);return n;})}/>
                   </td>
-                  <td style={cs.td}><div style={{fontWeight:600,fontSize:12}}>{e.name}</div><div style={{fontSize:10,color:"#60a5fa"}}>{e.id}</div></td>
+                  <td style={cs.td}>
+                    <div style={{fontWeight:600,fontSize:12}}>{e.name}</div>
+                    <div style={{fontSize:10,color:"#60a5fa"}}>{e.id}</div>
+                  </td>
+                  <td style={cs.td}>
+                    <div style={{fontSize:11,color:"#94a3b8"}}>{e.dept||"—"}</div>
+                    <div style={{fontSize:10,color:"#64748b"}}>📍 {e.loc||"—"}</div>
+                  </td>
                   <td style={{...cs.td,fontSize:11}}>
                     {noAtt
                       ?<span style={{color:"#f97316",fontSize:10}}>⚠️ No data</span>
-                      :<span><span style={{color:"#86efac"}}>{pr.P}P </span><span style={{color:"#fca5a5"}}>{pr.A}A </span><span style={{color:"#a5b4fc"}}>{pr.L1+pr.L2}L</span></span>
+                      :<div>
+                        <span style={{color:"#86efac"}}>{pr.P}P </span>
+                        <span style={{color:"#fca5a5"}}>{pr.A}A </span>
+                        {(pr.L1+pr.L2)>0&&<span style={{color:"#a5b4fc"}}>{pr.L1+pr.L2}L </span>}
+                        {pr.OTs>0&&<span style={{color:"#fcd34d"}}>{pr.OTs}★</span>}
+                        <div style={{fontSize:9,color:"#64748b"}}>{pr.workDays}wd</div>
+                      </div>
                     }
                   </td>
                   <td style={cs.td}>{show?money(pr.gross):<span style={{color:"#475569",letterSpacing:2}}>****</span>}</td>
-                  <td style={{...cs.td,color:pr.absD>0?"#fca5a5":"#475569"}}>{show&&pr.absD>0?"-"+money(pr.absD):"—"}</td>
-                  <td style={{...cs.td,color:pr.lateD>0?"#fde68a":"#475569"}}>{show&&pr.lateD>0?"-"+money(pr.lateD):"—"}</td>
+                  <td style={{...cs.td,color:pr.absD>0?"#fca5a5":"#475569"}}>
+                    {show&&pr.absD>0&&(
+                      <span title={pr.A+" days × "+money(pr.daily)}>-{money(pr.absD)}</span>
+                    )}{show&&pr.absD===0?"—":""}
+                    {!show&&<span style={{color:"#475569",letterSpacing:2}}>****</span>}
+                  </td>
+                  <td style={{...cs.td,color:pr.lateD>0?"#fde68a":"#475569"}}>{show&&pr.lateD>0?"-"+money(pr.lateD):(show?"—":"****")}</td>
                   <td style={{...cs.td,color:pr.otAmt>0?"#86efac":"#475569"}}>
-                    {show&&pr.otAmt>0?(
-                      <span title={"Weekday OT: "+money(pr.otNorm)+" | Fri/Sat/Sun OT: "+money(pr.otSpec)}>
-                        +{money(pr.otAmt)}{pr.otSpec>0&&<span style={{fontSize:9,color:"#fcd34d"}}> ★2×</span>}
-                      </span>
-                    ):"—"}
+                    {show&&pr.otAmt>0
+                      ?<span title={"Normal: "+money(pr.otNorm)+" | Fri/Sat/Sun: "+money(pr.otSpec)}>
+                          +{money(pr.otAmt)}{pr.otSpec>0&&<span style={{fontSize:9,color:"#fcd34d"}}> ★</span>}
+                        </span>
+                      :(show?"—":"****")
+                    }
                   </td>
-                  <td style={{...cs.td,color:pr.bonus>0?"#86efac":"#475569"}}>{show&&pr.bonus>0?"+"+money(pr.bonus):"—"}</td>
-                  <td style={{...cs.td,color:(pr.ded+pr.fines)>0?"#fca5a5":"#475569"}}>{show&&(pr.ded+pr.fines)>0?"-"+money(pr.ded+pr.fines):"—"}</td>
-                  <td style={{...cs.td,color:pr.warnDed>0?"#ef4444":"#475569"}}>{show&&pr.warnDed>0?"-"+money(pr.warnDed):"—"}</td>
-                  <td style={{...cs.td,color:pr.extraDed>0?"#f59e0b":"#475569"}}>{show&&pr.extraDed>0?"-"+money(pr.extraDed):"—"}</td>
-                  <td style={{...cs.td,fontWeight:700,color:pr.net<0?"#ef4444":"#34d399",fontSize:13}}>
+                  <td style={{...cs.td,color:totalDed>0?"#f59e0b":"#475569"}}>{show&&totalDed>0?"-"+money(totalDed):(show?"—":"****")}</td>
+                  <td style={{...cs.td,fontWeight:700,fontSize:13,color:pr.net<=0?"#ef4444":pr.net<pr.gross*0.7?"#f97316":"#34d399"}}>
                     {show?money(pr.net):<span style={{color:"#475569",letterSpacing:2}}>****</span>}
+                    {show&&pr.net<=0&&pr.A>0&&<div style={{fontSize:9,color:"#ef4444"}}>FULL ABSENT</div>}
                   </td>
-                  {/* PAY STATUS BADGE */}
                   <td style={cs.td}>
-                    <span style={{...Bdg(paid?"#22c55e":"#f97316"),whiteSpace:"nowrap"}}>{paid?"✅ Paid":"⏳ Unpaid"}</span>
+                    <span style={{...Bdg(paid?"#22c55e":"#f97316"),whiteSpace:"nowrap",display:"block",textAlign:"center"}}>
+                      {paid?"✅ Paid":"⏳ Unpaid"}
+                    </span>
                   </td>
-                  {/* ACTION BUTTONS */}
                   <td style={{...cs.td,whiteSpace:"nowrap"}}>
                     {can(role,"adjEdit")&&(
-                      <button style={{...Btn("#1e3a5f"),fontSize:10,marginRight:3,padding:"5px 8px"}} onClick={()=>setSelId(e.id===selId?null:e.id)} title="Adjust OT/Bonus">⚙️</button>
+                      <button style={{...Btn("#1e3a5f"),fontSize:10,marginRight:3,padding:"4px 7px"}} onClick={()=>setSelId(e.id===selId?null:e.id)}>⚙️</button>
                     )}
                     {can(role,"markPaid")&&(
-                      <button
-                        style={{...Btn(paid?"#7c2d12":"#166534"),fontSize:10,marginRight:3,padding:"5px 10px"}}
-                        onClick={()=>togglePay(e.id)}
-                        title={paid?"Mark as Unpaid":"Mark as Paid"}
-                      >
-                        {paid?"↩ Unpay":"✓ Pay"}
+                      <button style={{...Btn(paid?"#7c2d12":"#166534"),fontSize:10,marginRight:3,padding:"4px 8px"}} onClick={()=>togglePay(e.id)}>
+                        {paid?"↩":"✓ Pay"}
                       </button>
                     )}
                     {can(role,"slips")&&show&&(
-                      <button style={{...Btn("#1e3a5f"),fontSize:10,padding:"5px 8px"}} onClick={()=>{addLog("Slip Printed",e.name+" "+MN[m-1]+" "+y);setSlip(buildSalarySlip(e,pr,y,m));}} title="Print Salary Slip">🖨️</button>
+                      <button style={{...Btn("#1e3a5f"),fontSize:10,padding:"4px 7px"}} onClick={()=>{addLog("Slip Printed",e.name+" "+MN[m-1]+" "+y);setSlip(buildSalarySlip(e,pr,y,m));}}>🖨️</button>
                     )}
                   </td>
                 </tr>
               );
             })}
-            {/* Totals row */}
             <tr style={{background:"#0f172a",fontWeight:700}}>
-              <td style={cs.td} colSpan={2}>TOTAL ({filteredRows.length} shown)</td>
-              <td style={cs.td} colSpan={9}/>
+              <td style={cs.td} colSpan={4}>TOTAL — {filteredRows.length} shown</td>
+              <td style={cs.td}>{money(filteredRows.reduce((s,r)=>s+r.pr.gross,0))}</td>
+              <td style={{...cs.td,color:"#fca5a5"}}>-{money(filteredRows.reduce((s,r)=>s+r.pr.absD,0))}</td>
+              <td style={{...cs.td,color:"#fde68a"}}>-{money(filteredRows.reduce((s,r)=>s+r.pr.lateD,0))}</td>
+              <td style={{...cs.td,color:"#86efac"}}>+{money(filteredRows.reduce((s,r)=>s+r.pr.otAmt,0))}</td>
+              <td style={cs.td}/>
               <td style={{...cs.td,color:"#34d399",fontSize:14}}>{money(filteredRows.reduce((s,r)=>s+r.pr.net,0))}</td>
               <td style={cs.td} colSpan={2}/>
             </tr>

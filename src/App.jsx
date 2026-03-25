@@ -7,7 +7,7 @@ import { useState, useEffect } from "react";
 ═══════════════════════════════════════════════════════════════ */
 
 /* ─── SUPABASE CONFIG ─── */
-const SB_URL = "https://atgqbehlldk lxczgagdu.supabase.co";
+const SB_URL = "https://atgqbehlldklxczgagdu.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImF0Z3FiZWhsbGRrbHhjemdhZ2R1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI4MzA0MzYsImV4cCI6MjA4ODQwNjQzNn0.nV7kKlA7t1zS1KfJHX1QB_U0KqtyQLmt2HBbe4QMQ0o";
 
 const SB = {
